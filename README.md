@@ -17,34 +17,46 @@ The paradigm, in DB terms:
 
 ## Status
 
-**v1 — paradigm proof, in progress** (scenario-by-scenario, TDD):
+**v1 — paradigm proof, complete** (8 scenarios + industrial time-travel extension):
 
 - [x] S1 Columnar table storage — SoA fields (Int64/Float64), CRUD by key,
-      NotFound semantics, bit-exact NaN/-0.0 passthrough, swap-with-last
-      erase (no tombstones), sparse-friendliness (100M key span, 100k rows)
-- [ ] S2 Sparse pages
-- [ ] S3 Journal + determinism
-- [ ] S4 Transactions = snapshot/rollback (COW)
-- [ ] S5 Materialized views as automata
-- [ ] S6 View dependency chains
-- [ ] S7 Fuzzy queries
-- [ ] S8 Replay across transactions
+      NotFound, bit-exact NaN/-0.0, swap-with-last erase, sparse-friendliness
+- [x] S2 Sparse pages — pages materialize on first write, sleep when empty;
+      scan cost proportional to written pages (1M key span / 1 page → 1 touched)
+- [x] S3 Journal + determinism — append-only, bit-exact replay incl. NaN/-0.0,
+      layout-independent
+- [x] S4 Transactions = snapshot/rollback (COW) — rollback bit-exact,
+      snapshot cost proportional to dirty pages (counter-proven)
+- [x] S5 Materialized views as automata — SUM view, per-page partials,
+      lazy incremental recompute (1 write → 1 page recomputed)
+- [x] S6 View dependency chains — declared edges, cycle rejection,
+      lazy selective propagation (B recomputed only when A changed)
+- [x] S7 Fuzzy queries — membership filter (step/ramp/triangle) via core
+      FuzzyRegistry; swap the function without touching query code
+- [x] S8 Replay across transactions — tx boundaries in journal,
+      rollbacks not replayed, per-tx audit enumeration
+- [x] S9 *(extension)* Journal timestamps — monotonic ts on every entry,
+      injectable clock, `replay_at(t)` time-travel (historian/audit)
 
-## Query language (v2)
+**64/64 tests green.**
 
-EAFAR-DB's native interface is a custom language, **not SQL** — SQL is the
-syntax of relational algebra, and this system is not a relational system.
-The language must express what the paradigm is:
+## Industrial fit
 
-```
-READ temperature FROM sensors WHERE temperature IS hot   -- fuzzy predicate
-READ temperature FROM sensors ON CHANGE                   -- change is default
-VIEW avg_temp = AVG(temperature) FROM sensors             -- view = automaton
-WATCH fire_events IN sensors                              -- events first-class
-```
+The journal is an append-only, immutable, time-stamped record of every state
+change — i.e. an **audit trail with provenance** out of the box. Combined with
+`replay_at(t)` (state as of any timestamp) and fuzzy trend predicates, this is
+the stack SCADA/IIoT actually needs *above* the field bus:
 
-SQL may arrive later as an optional interop shim, never as the native
-interface.
+| SCADA need | EAFAR-DB |
+|---|---|
+| tag historian | journal = history of every change, no sampling loss |
+| time-travel / audit | `replay_at(t)` + `transaction_ranges()` |
+| HMI dirty updates | update only what changed (same as GUI dirty regions) |
+| alarm automata | views/automata over field events, not imperative code |
+| trend detection | fuzzy predicates (`temperature IS rising`) |
+
+The control loop (PLC at 1 kHz) and the protocol stacks (Modbus/OPC-UA) stay
+where they are — EAFAR-DB is the **state + historian + audit layer** over them.
 
 ## Build
 
