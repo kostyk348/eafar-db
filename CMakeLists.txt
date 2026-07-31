@@ -32,6 +32,7 @@ add_library(eafardb STATIC
     src/table.cpp
     src/journal.cpp
     src/view.cpp
+    src/derived_view.cpp
 )
 target_include_directories(eafardb PUBLIC include)
 target_link_libraries(eafardb PUBLIC eafar)
@@ -45,6 +46,7 @@ add_executable(eafardb_tests
     tests/test_journal.cpp
     tests/test_tx.cpp
     tests/test_view.cpp
+    tests/test_chain.cpp
 )
 target_link_libraries(eafardb_tests PRIVATE eafardb)
 target_compile_options(eafardb_tests PRIVATE -Wall -Wextra)
