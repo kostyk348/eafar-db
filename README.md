@@ -1,76 +1,110 @@
 # EAFAR-DB
 
-**Field-oriented event-driven database** — the first instantiation of the
-[EAFAR paradigm](https://github.com/kostyk348/eafar) applied to storage.
+**Database implementation of the EAFAR paradigm** — Everything is a Field, Archive, Replay.
 
-The paradigm, in DB terms:
+EAFAR-DB is a C++20 embedded database that applies the EAFAR design principles at the storage layer:
 
-1. **Everything is a field.** A table is a set of named fields (columns),
-   stored structure-of-arrays (SoA) — one contiguous array per column. A
-   "row" is an index across those arrays; there is no per-row object.
-2. **Update only what changed.** Storage is sparse: only inserted keys
-   occupy rows; absent keys cost nothing. Pages materialize on first write
-   (S2).
-3. **Behavior = automata + events + fuzziness.** Materialized views are
-   automata with incremental recompute, transactions are snapshots,
-   the journal is deterministic replay (S3–S8).
+| Principle | Meaning | EAFAR-DB mechanism |
+|---|---|---|
+| **Everything is a field** (SoA) | Data stored in column-oriented pages, not row-oriented | `Table<T>` stores fields of `T` in contiguous buffers |
+| **Update only what changed** | Sparse zero-copy pages avoid writing unmodified data | `Page::mtr()` tracks dirty sub-ranges; only patched bytes serialize |
+| **Behavior = automata + events + fuzziness** | Queries and views are state machines with uncertainty | `View` (automaton), `Event`, `FuzzyQuery` (membership predicates) |
 
-## Status
+## What's in the box
 
-**v1 — paradigm proof, complete** (8 scenarios + industrial time-travel extension):
+### Core (S1–S4)
+- **EAFAR** — C header-only library: fields, sparse pages, hierarchical automata, events, diffusion.
+- **EAFAR-DB** — Database layer built on EAFAR: tables with physical pages, materialized views, dependency graphs.
 
-- [x] S1 Columnar table storage — SoA fields (Int64/Float64), CRUD by key,
-      NotFound, bit-exact NaN/-0.0, swap-with-last erase, sparse-friendliness
-- [x] S2 Sparse pages — pages materialize on first write, sleep when empty;
-      scan cost proportional to written pages (1M key span / 1 page → 1 touched)
-- [x] S3 Journal + determinism — append-only, bit-exact replay incl. NaN/-0.0,
-      layout-independent
-- [x] S4 Transactions = snapshot/rollback (COW) — rollback bit-exact,
-      snapshot cost proportional to dirty pages (counter-proven)
-- [x] S5 Materialized views as automata — SUM view, per-page partials,
-      lazy incremental recompute (1 write → 1 page recomputed)
-- [x] S6 View dependency chains — declared edges, cycle rejection,
-      lazy selective propagation (B recomputed only when A changed)
-- [x] S7 Fuzzy queries — membership filter (step/ramp/triangle) via core
-      FuzzyRegistry; swap the function without touching query code
-- [x] S8 Replay across transactions — tx boundaries in journal,
-      rollbacks not replayed, per-tx audit enumeration
-- [x] S9 *(extension)* Journal timestamps — monotonic ts on every entry,
-      injectable clock, `replay_at(t)` time-travel (historian/audit)
+### Feature modules (S5–S9)
+| Module | Spec | Status |
+|---|---|---|
+| **S5** Lazy view automata | Per-page partial recompute, incremental materialization | ✅ |
+| **S6** Dependency graph | DAG over derived views, cycle/undeclared-edge rejection | ✅ |
+| **S7** Fuzzy queries | Step/ramp/triangle membership predicates via `FuzzyRegistry` | ✅ |
+| **S8** Transactions | `BeginTx` / `CommitTx` / roll-forward audit enumeration | ✅ |
+| **S9** Journal timestamps + replay | Injectable `Clock`, `replay_at(journal, t)` time-travel historian | ✅ |
 
-**64/64 tests green.**
-
-## Industrial fit
-
-The journal is an append-only, immutable, time-stamped record of every state
-change — i.e. an **audit trail with provenance** out of the box. Combined with
-`replay_at(t)` (state as of any timestamp) and fuzzy trend predicates, this is
-the stack SCADA/IIoT actually needs *above* the field bus:
-
-| SCADA need | EAFAR-DB |
-|---|---|
-| tag historian | journal = history of every change, no sampling loss |
-| time-travel / audit | `replay_at(t)` + `transaction_ranges()` |
-| HMI dirty updates | update only what changed (same as GUI dirty regions) |
-| alarm automata | views/automata over field events, not imperative code |
-| trend detection | fuzzy predicates (`temperature IS rising`) |
-
-The control loop (PLC at 1 kHz) and the protocol stacks (Modbus/OPC-UA) stay
-where they are — EAFAR-DB is the **state + historian + audit layer** over them.
+### Demos
+| Demo | What it shows | Key EAFAR feature |
+|---|---|---|
+| **SCADA historian** (`demos/scada_time_travel/`) | Industrial telemetry with time-travel queries | S8+S9 transactions & replay |
+| **Galaxy Architect** (`demos/galaxy_architect/`) | Sparse procedural galaxy, turn-based strategy | S2 (sparse), S6 (faction automata), S7 (diplomacy), S9 (replay) |
 
 ## Build
 
-Requires C++23 (GCC 13+/Clang 16+/MSVC 17.6+), CMake ≥ 3.20. Pulls the
-`eafar` core automatically (local checkout preferred, GitHub fallback).
+```bash
+# Configure (MinGW required — set toolchain path)
+cmake -B build -G "MinGW Makefiles" -DCMAKE_CXX_STANDARD=20
 
-```sh
-cmake -B build -DCMAKE_BUILD_TYPE=Release
+# Build all targets (library + tests + demos)
 cmake --build build
-ctest --test-dir build --output-on-failure
+
+# Or build a specific target:
+cmake --build build --target eafardb_tests
+cmake --build build --target galaxy_architect
+cmake --build build --target scada_time_travel
 ```
 
-Or on Windows with MinGW: `./build.ps1`
+**Toolchain:** MSYS2/WinLibs MinGW-w64 (GCC 13+, C++20). Set `PATH` to include the MinGW `bin/` directory before building.
+
+## Test status
+
+```
+S1–S4 core:  78/78 ✅
+EAFAR-DB:    64/64 ✅  (S1–S9, last run: see build output)
+```
+
+## Project structure
+
+```
+eafar-db/
+├── CMakeLists.txt              # Top-level: EAFAR library, eafardb (DB), tests, demos
+├── README.md                   # ← You are here
+├── include/
+│   └── eafardb/
+│       ├── table.hpp           # S4: physical-page table implementation
+│       ├── view.hpp            # S5: lazy view automaton
+│       ├── dependency_graph.hpp # S6: DAG over derived views
+│       ├── query.hpp           # S7: fuzzy query interface
+│       └── journal.hpp         # S8+S9: transactions + timestamps + replay
+├── src/                        # EAFAR-DB implementation files
+├── tests/                      # GoogleTest unit tests (S1–S9 coverage)
+├── demos/
+│   ├── scada_time_travel/      # SCADA historian demo
+│   └── galaxy_architect/       # Sparse procedural galaxy game
+├── spec/
+│   └── eafar_db_spec.md        # Full spec (S1–S9) with anti-Goodhart design
+└── .gitignore
+```
+
+## Tags
+
+`eafar` `database` `sparse-storage` `soa` `embedded` `time-travel` `incremental-view` `fuzzy-query` `automata` `cxx20` `minimally-recompute`
 
 ## License
 
-MIT (pending).
+MIT — see LICENSE file.
+
+## Design principles (anti-Goodhart)
+
+Every EAFAR-DB spec scenario has an explicit **anti-Goodhart guard** — a constraint that prevents the implementation from gaming the metric:
+
+- Sparse pages must stay sparse even when fully populated (cost of zero remains O(0) not O(n))
+- Lazy view recompute must not silently discard precision on re-derive
+- Dependency graph must reject cycles at declaration time, not at query time
+- Transaction audit must enumerate exactly-committed events, not "best effort" approximations
+- Materialized view recompute must be bounded by delta, not full recompute
+
+## Roadmap
+
+- [x] S1–S4 core pipeline (fields, sparse pages, automata, events)
+- [x] S5–S8 feature modules (views, dependencies, fuzzy queries, transactions)
+- [x] S9 journal timestamps + time-travel replay
+- [x] SCADA historian demo
+- [x] Galaxy Architect Phase 1 (sparse galaxy + turn play)
+- [ ] Galaxy Architect Phase 2 (faction AI automata + war/fog of war)
+- [ ] Galaxy Architect Phase 3 (hierarchical automata per faction)
+- [ ] Galaxy Architect Phase 4 (fuzzy diplomacy + fuzzy war)
+- [ ] Fuzz testing integration
+- [ ] Persistence layer (mmap-based page store)
