@@ -264,12 +264,14 @@ void Table::begin_transaction() {
     snap->pages = pages_;             // shared_ptr copies: no data copied
     snap->journal_size = journal_.size();
     snapshot_ = std::move(snap);
+    journal_.begin_tx(); // S8: audit marker (erased by rollback truncate)
 }
 
 void Table::commit() {
     if (!snapshot_) {
         throw std::runtime_error("eafardb: no open transaction");
     }
+    journal_.commit_tx(); // S8: audit marker
     snapshot_.reset(); // COW'd pages keep their copies; state stays
 }
 
@@ -310,6 +312,11 @@ Table Table::replay(const Journal& journal, std::uint32_t page_size) {
             t.set_f(e.key, e.column, v);
             break;
         }
+        // S8: transaction boundaries are audit metadata; replaying the
+        // committed stream applies the same ops without them.
+        case JournalOp::BeginTx:
+        case JournalOp::CommitTx:
+            break;
         }
     }
     return t;

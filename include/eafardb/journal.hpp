@@ -12,7 +12,9 @@
 #include "eafardb/table_fwd.hpp"
 
 #include <cstdint>
+#include <limits>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace eafardb {
@@ -23,6 +25,8 @@ enum class JournalOp : std::uint8_t {
     Erase = 2,
     SetI = 3,
     SetF = 4,
+    BeginTx = 5,  // S8: transaction boundary markers (audit, not replayed)
+    CommitTx = 6, // S8: end of a committed transaction
 };
 
 struct JournalEntry {
@@ -44,6 +48,9 @@ public:
     void erase(int64_t key);
     void set_i(int64_t key, std::uint32_t column, int64_t value);
     void set_f(int64_t key, std::uint32_t column, std::uint64_t value_bits);
+    // S8: transaction boundary markers (audit; no-op on replay).
+    void begin_tx();
+    void commit_tx();
 
     std::size_t size() const { return entries_.size(); }
     const std::vector<JournalEntry>& entries() const { return entries_; }
@@ -54,6 +61,30 @@ public:
             keep = entries_.size();
         }
         entries_.resize(keep);
+    }
+
+    // S8 audit: half-open index ranges [begin, end) of every committed
+    // transaction (BeginTx..CommitTx inclusive), in commit order.
+    // Entries recorded outside any transaction are not part of any range.
+    std::vector<std::pair<std::size_t, std::size_t>> transaction_ranges() const {
+        std::vector<std::pair<std::size_t, std::size_t>> out;
+        std::size_t start = std::numeric_limits<std::size_t>::max();
+        for (std::size_t i = 0; i < entries_.size(); ++i) {
+            switch (entries_[i].op) {
+            case JournalOp::BeginTx:
+                start = i;
+                break;
+            case JournalOp::CommitTx:
+                if (start != std::numeric_limits<std::size_t>::max()) {
+                    out.emplace_back(start, i + 1);
+                }
+                start = std::numeric_limits<std::size_t>::max();
+                break;
+            default:
+                break;
+            }
+        }
+        return out;
     }
 
 private:

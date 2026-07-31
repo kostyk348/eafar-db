@@ -58,4 +58,26 @@ void Journal::set_f(int64_t key, std::uint32_t column, std::uint64_t value_bits)
     entries_.push_back(std::move(e));
 }
 
+void Journal::begin_tx() {
+    JournalEntry e;
+    e.op = JournalOp::BeginTx;
+    e.column = 0;
+    e.type = 0;
+    e.key = 0;
+    e.value_i = 0;
+    e.value_bits = 0;
+    entries_.push_back(std::move(e));
+}
+
+void Journal::commit_tx() {
+    JournalEntry e;
+    e.op = JournalOp::CommitTx;
+    e.column = 0;
+    e.type = 0;
+    e.key = 0;
+    e.value_i = 0;
+    e.value_bits = 0;
+    entries_.push_back(std::move(e));
+}
+
 } // namespace eafardb

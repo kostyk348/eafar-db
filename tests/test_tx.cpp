@@ -54,8 +54,9 @@ TEST(begin_commit_basic) {
     CHECK_EQ(t.get_f(1, 0), 20.0);
     CHECK_EQ(t.get_f(2, 0), 5.0);
     // Committed writes stay in the journal.
-    // 1 AddColumn + 1 Insert(1) + 1 SetF(10) + 1 SetF(20) + 1 Insert(2) + 1 SetF(5) = 6
-    CHECK_EQ(t.journal().size(), 6u);
+    // 1 AddColumn + 1 BeginTx + 1 Insert(1) + 1 SetF(10) + 1 SetF(20)
+    // + 1 Insert(2) + 1 SetF(5) + 1 CommitTx = 8
+    CHECK_EQ(t.journal().size(), 8u);
 }
 
 TEST(rollback_restores_bit_exact) {
