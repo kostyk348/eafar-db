@@ -1,5 +1,6 @@
 #pragma once
-// eafardb/table.hpp — S1/S2: Columnar table storage with sparse pages.
+// eafardb/table.hpp — S1/S2/S3: Columnar table storage, sparse pages,
+// write journal + determinism.
 //
 // The paradigm's "everything is a field" applied to a database:
 // a table is a set of named fields (columns), each stored SoA
@@ -12,6 +13,13 @@
 // (zero memory) — it "wakes up" on first write. Scans iterate only rows
 // that exist and count distinct pages touched: scan cost is proportional
 // to materialized pages, never to the key range (S2 thesis).
+//
+// Every mutation is recorded in a write journal (S3). The journal is the
+// primary source of truth: Table::replay() reconstructs bit-identical
+// state (including NaN bit patterns and -0.0) from an empty table.
+
+#include "eafardb/table_fwd.hpp"
+#include "eafardb/journal.hpp"
 
 #include <cstdint>
 #include <functional>
@@ -22,8 +30,6 @@
 #include <vector>
 
 namespace eafardb {
-
-enum class ColumnType : std::uint8_t { Int64, Float64 };
 
 class Table {
 public:
@@ -66,6 +72,13 @@ public:
     std::uint64_t page_count() const;
     // Pages touched by scans (monotonic counter, for the S2 thesis).
     std::uint64_t touched_pages() const { return touched_pages_; }
+
+    // --- Journal (S3) ---
+    // The write journal of this table's mutations, in apply order.
+    const Journal& journal() const { return journal_; }
+    // Reconstructs a table from a journal, from empty. The result is
+    // bit-identical to the table the journal was recorded from.
+    static Table replay(const Journal& journal, std::uint32_t page_size = 256);
 
     // Full scans, in ascending key order. Each distinct page visited
     // increments touched_pages_ exactly once. Callback receives (key, value).
@@ -112,6 +125,7 @@ private:
 
     std::uint32_t page_size_;      // keys per page
     mutable std::uint64_t touched_pages_ = 0; // scan page-visit counter
+    Journal journal_;              // write journal of this table (S3)
 };
 
 } // namespace eafardb

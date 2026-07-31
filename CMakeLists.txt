@@ -30,6 +30,7 @@ FetchContent_MakeAvailable(eafar)
 # --- EAFAR-DB: field-oriented event-driven database ---
 add_library(eafardb STATIC
     src/table.cpp
+    src/journal.cpp
 )
 target_include_directories(eafardb PUBLIC include)
 target_link_libraries(eafardb PUBLIC eafar)
@@ -40,6 +41,7 @@ add_executable(eafardb_tests
     tests/main.cpp
     tests/test_table.cpp
     tests/test_pages.cpp
+    tests/test_journal.cpp
 )
 target_link_libraries(eafardb_tests PRIVATE eafardb)
 target_compile_options(eafardb_tests PRIVATE -Wall -Wextra)

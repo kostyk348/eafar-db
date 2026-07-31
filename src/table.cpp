@@ -39,7 +39,9 @@ std::uint32_t Table::add_column(std::string name, ColumnType type) {
         type_index_.push_back(static_cast<std::uint32_t>(float_columns_.size()));
         float_columns_.emplace_back();
     }
-    return static_cast<std::uint32_t>(column_names_.size() - 1);
+    const std::uint32_t id = static_cast<std::uint32_t>(column_names_.size() - 1);
+    journal_.add_column(id, column_names_.back(), static_cast<std::uint8_t>(type));
+    return id;
 }
 
 std::uint32_t Table::column_id(std::string_view name) const {
@@ -82,7 +84,7 @@ std::uint32_t Table::row_of(int64_t key) const {
 
 void Table::insert(int64_t key) {
     if (row_map_.contains(key)) {
-        return; // no-op on existing key
+        return; // no-op on existing key (not journaled: no state change)
     }
     const std::uint32_t row = static_cast<std::uint32_t>(row_keys_.size());
     row_map_.emplace(key, row);
@@ -93,6 +95,7 @@ void Table::insert(int64_t key) {
     for (auto& col : float_columns_) {
         col.push_back(0.0);
     }
+    journal_.insert(key);
 }
 
 bool Table::contains(int64_t key) const {
@@ -129,6 +132,7 @@ void Table::erase(int64_t key) {
     for (auto& col : float_columns_) {
         col.pop_back();
     }
+    journal_.erase(key);
 }
 
 int64_t Table::get_i(int64_t key, std::uint32_t col) const {
@@ -141,10 +145,14 @@ double Table::get_f(int64_t key, std::uint32_t col) const {
 
 void Table::set_i(int64_t key, std::uint32_t col, int64_t value) {
     int_columns_[int_index(col)][row_of(key)] = value;
+    journal_.set_i(key, col, value);
 }
 
 void Table::set_f(int64_t key, std::uint32_t col, double value) {
     float_columns_[float_index(col)][row_of(key)] = value;
+    std::uint64_t bits;
+    std::memcpy(&bits, &value, sizeof(bits));
+    journal_.set_f(key, col, bits);
 }
 
 const std::vector<int64_t>& Table::column_i(std::uint32_t col) const {
@@ -153,6 +161,39 @@ const std::vector<int64_t>& Table::column_i(std::uint32_t col) const {
 
 const std::vector<double>& Table::column_f(std::uint32_t col) const {
     return float_columns_[float_index(col)];
+}
+
+// ---------------------------------------------------------------------------
+// Journal replay (S3)
+// ---------------------------------------------------------------------------
+
+Table Table::replay(const Journal& journal, std::uint32_t page_size) {
+    Table t(page_size);
+    for (const auto& e : journal.entries()) {
+        switch (e.op) {
+        case JournalOp::AddColumn:
+            // add_column throws on duplicates; a journal is a valid history,
+            // so this cannot happen for a well-formed journal.
+            t.add_column(e.name, static_cast<ColumnType>(e.type));
+            break;
+        case JournalOp::Insert:
+            t.insert(e.key);
+            break;
+        case JournalOp::Erase:
+            t.erase(e.key);
+            break;
+        case JournalOp::SetI:
+            t.set_i(e.key, e.column, e.value_i);
+            break;
+        case JournalOp::SetF: {
+            double v;
+            std::memcpy(&v, &e.value_bits, sizeof(v));
+            t.set_f(e.key, e.column, v);
+            break;
+        }
+        }
+    }
+    return t;
 }
 
 // ---------------------------------------------------------------------------
