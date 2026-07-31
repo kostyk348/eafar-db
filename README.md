@@ -3,7 +3,7 @@
 [![C++20](https://img.shields.io/badge/language-C%2B%2B20-blue)]()
 [![Build](https://img.shields.io/badge/build-MinGW--w64-green)]()
 [![Tests](https://img.shields.io/badge/tests-142%2F142-brightgreen)]()
-[![License](https://img.shields.io/badge/license-MIT-lightgrey)]()
+[![License](https://img.shields.io/badge/license-Apache--2.0-red)]()
 [![Version](https://img.shields.io/badge/version-v0.1.0-blue)]()
 
 > **EAFAR-DB** — Database built on the **EAFAR** design principles *(Everything is a Field, Archive, Replay)*. Embedded, sparse, time-travelable.
