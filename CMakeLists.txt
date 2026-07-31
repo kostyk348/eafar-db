@@ -9,6 +9,8 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
 
+option(EAFARDB_DEMOS "Build demo applications (e.g. SCADA historian)" OFF)
+
 # --- Core dependency (EAFAR paradigm substrate) ---
 # Prefer a local checkout for development; fall back to cloning from GitHub.
 include(FetchContent)
@@ -56,3 +58,18 @@ target_compile_options(eafardb_tests PRIVATE -Wall -Wextra)
 
 enable_testing()
 add_test(NAME eafardb_tests COMMAND eafardb_tests)
+
+# --- Demos ---
+if(EAFARDB_DEMOS)
+  add_executable(scada_time_travel
+      demos/scada_time_travel/main.cpp
+  )
+  target_link_libraries(scada_time_travel PRIVATE eafardb)
+  target_compile_options(scada_time_travel PRIVATE -Wall -Wextra)
+
+  add_executable(galaxy_architect
+      demos/galaxy_architect/main.cpp
+  )
+  target_link_libraries(galaxy_architect PRIVATE eafardb)
+  target_compile_options(galaxy_architect PRIVATE -Wall -Wextra)
+endif()

@@ -124,6 +124,10 @@ public:
     // Cells deep-copied by copy-on-write (S4 counter proof).
     std::uint64_t copied_cells() const { return copied_cells_; }
 
+    // S9: install the timestamp clock for FUTURE journal entries.
+    // Determinism: tests drive the timeline explicitly.
+    void set_journal_clock(Journal::Clock clock) { journal_.set_clock(std::move(clock)); }
+
     // --- Materialized views (S5): view = automaton over page events ---
     // A view subscribes via View's constructor (source table's attach()).
     // Every mutation that touches a page notifies attached views, so a
@@ -146,10 +150,6 @@ public:
     // replays only entries with ts <= t (journal = historian).
     static Table replay_at(const Journal& journal, std::uint64_t t,
                            std::uint32_t page_size = 256);
-
-    // S9: install the timestamp clock for FUTURE journal entries.
-    // Determinism: tests drive the timeline explicitly.
-    void set_journal_clock(Journal::Clock clock) { journal_.set_clock(std::move(clock)); }
 
     // Full scans, in ascending key order. Each distinct page visited
     // increments touched_pages_ exactly once. Callback receives (key, value).
