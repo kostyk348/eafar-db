@@ -322,6 +322,41 @@ Table Table::replay(const Journal& journal, std::uint32_t page_size) {
     return t;
 }
 
+// S9: time-travel replay — apply only entries stamped at or before `t`.
+Table Table::replay_at(const Journal& journal, std::uint64_t t,
+                       std::uint32_t page_size) {
+    Table out(page_size);
+    for (const auto& e : journal.entries()) {
+        if (e.ts > t) {
+            continue; // future history: not yet happened at time t
+        }
+        switch (e.op) {
+        case JournalOp::AddColumn:
+            out.add_column(e.name, static_cast<ColumnType>(e.type));
+            break;
+        case JournalOp::Insert:
+            out.insert(e.key);
+            break;
+        case JournalOp::Erase:
+            out.erase(e.key);
+            break;
+        case JournalOp::SetI:
+            out.set_i(e.key, e.column, e.value_i);
+            break;
+        case JournalOp::SetF: {
+            double v;
+            std::memcpy(&v, &e.value_bits, sizeof(v));
+            out.set_f(e.key, e.column, v);
+            break;
+        }
+        case JournalOp::BeginTx:
+        case JournalOp::CommitTx:
+            break;
+        }
+    }
+    return out;
+}
+
 // ---------------------------------------------------------------------------
 // Scans (S2) — ascending pages, ascending keys within pages
 // ---------------------------------------------------------------------------

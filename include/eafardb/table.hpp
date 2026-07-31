@@ -142,6 +142,14 @@ public:
     // Reconstructs a table from a journal, from empty. The result is
     // bit-identical to the table the journal was recorded from.
     static Table replay(const Journal& journal, std::uint32_t page_size = 256);
+    // S9: time-travel — reconstructs the state as of timestamp `t`:
+    // replays only entries with ts <= t (journal = historian).
+    static Table replay_at(const Journal& journal, std::uint64_t t,
+                           std::uint32_t page_size = 256);
+
+    // S9: install the timestamp clock for FUTURE journal entries.
+    // Determinism: tests drive the timeline explicitly.
+    void set_journal_clock(Journal::Clock clock) { journal_.set_clock(std::move(clock)); }
 
     // Full scans, in ascending key order. Each distinct page visited
     // increments touched_pages_ exactly once. Callback receives (key, value).

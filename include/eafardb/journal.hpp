@@ -11,7 +11,9 @@
 
 #include "eafardb/table_fwd.hpp"
 
+#include <chrono>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <string>
 #include <utility>
@@ -37,11 +39,22 @@ struct JournalEntry {
     int64_t value_i;          // SetI value
     std::uint64_t value_bits; // SetF value, bit-exact (memcpy of double)
     std::string name;         // AddColumn: column name
+    std::uint64_t ts = 0;     // S9: monotonic timestamp at append time
 };
 
 class Journal {
 public:
-    Journal() = default;
+    // Monotonic clock source. Default: steady milliseconds since epoch.
+    // Injectable for determinism (tests drive the timeline explicitly).
+    using Clock = std::function<std::uint64_t()>;
+
+    Journal() : clock_(default_clock()) {}
+    explicit Journal(Clock clock) : clock_(std::move(clock)) {}
+
+    // Replaces the clock (e.g. install a deterministic one). Only affects
+    // timestamps of FUTURE entries; history keeps its ts values.
+    void set_clock(Clock clock) { clock_ = std::move(clock); }
+    std::uint64_t now() const { return clock_(); }
 
     void add_column(std::uint32_t id, std::string name, std::uint8_t type);
     void insert(int64_t key);
@@ -89,6 +102,18 @@ public:
 
 private:
     std::vector<JournalEntry> entries_;
+    Clock clock_;
+
+    static Clock default_clock() {
+        return [] {
+            return static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch())
+                    .count());
+        };
+    }
+
+    void stamp(JournalEntry& e) const { e.ts = clock_(); }
 };
 
 } // namespace eafardb
