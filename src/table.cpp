@@ -1,7 +1,6 @@
 #include "eafardb/table.hpp"
 
 #include <cstring>
-#include <limits>
 #include <sstream>
 
 namespace eafardb {
@@ -32,12 +31,26 @@ std::uint32_t Table::add_column(std::string name, ColumnType type) {
     }
     column_names_.push_back(std::move(name));
     column_types_.push_back(type);
+    // Local per-type index = number of same-type columns already present.
+    std::uint32_t local = 0;
+    for (std::size_t i = 0; i + 1 < column_types_.size(); ++i) {
+        if (column_types_[i] == type) {
+            ++local;
+        }
+    }
+    type_index_.push_back(local);
+    // Every materialized page gets a new column array for this column
+    // (COW: never mutate a page shared with an open snapshot).
     if (type == ColumnType::Int64) {
-        type_index_.push_back(static_cast<std::uint32_t>(int_columns_.size()));
-        int_columns_.emplace_back();
+        for (auto& [id, page] : pages_) {
+            page.detach(copied_cells_);
+            page.data->int_cols.emplace_back();
+        }
     } else {
-        type_index_.push_back(static_cast<std::uint32_t>(float_columns_.size()));
-        float_columns_.emplace_back();
+        for (auto& [id, page] : pages_) {
+            page.detach(copied_cells_);
+            page.data->float_cols.emplace_back();
+        }
     }
     const std::uint32_t id = static_cast<std::uint32_t>(column_names_.size() - 1);
     journal_.add_column(id, column_names_.back(), static_cast<std::uint8_t>(type));
@@ -74,93 +87,186 @@ std::uint32_t Table::float_index(std::uint32_t col) const {
     return type_index_[col];
 }
 
-std::uint32_t Table::row_of(int64_t key) const {
-    auto it = row_map_.find(key);
-    if (it == row_map_.end()) {
+const Page& Table::const_page(std::uint64_t id) const {
+    auto it = pages_.find(id);
+    if (it == pages_.end()) {
+        throw std::out_of_range("eafardb: page not materialized");
+    }
+    return it->second;
+}
+
+Page& Table::mutable_page(std::uint64_t id) {
+    auto it = pages_.find(id);
+    if (it == pages_.end()) {
+        throw std::out_of_range("eafardb: page not materialized");
+    }
+    it->second.detach(copied_cells_);
+    return it->second;
+}
+
+std::uint32_t Table::row_of_page(const Page& p, int64_t key) const {
+    auto it = p.data->row_map.find(key);
+    if (it == p.data->row_map.end()) {
         throw key_error(key);
     }
     return it->second;
 }
 
 void Table::insert(int64_t key) {
-    if (row_map_.contains(key)) {
+    const std::uint64_t pid = page_id(key);
+    auto it = pages_.find(pid);
+    if (it != pages_.end() && it->second.data->row_map.contains(key)) {
         return; // no-op on existing key (not journaled: no state change)
     }
-    const std::uint32_t row = static_cast<std::uint32_t>(row_keys_.size());
-    row_map_.emplace(key, row);
-    row_keys_.push_back(key);
-    for (auto& col : int_columns_) {
+    if (it == pages_.end()) {
+        it = pages_.emplace(pid, Page{}).first;
+        // A fresh page must materialize arrays for every column that
+        // already exists (add_column before insert / replay order).
+        PageData& fresh = *it->second.data;
+        for (const ColumnType t : column_types_) {
+            if (t == ColumnType::Int64) {
+                fresh.int_cols.emplace_back();
+            } else {
+                fresh.float_cols.emplace_back();
+            }
+        }
+    } else {
+        it->second.detach(copied_cells_);
+    }
+    PageData& d = *it->second.data;
+    const std::uint32_t row = static_cast<std::uint32_t>(d.row_keys.size());
+    d.row_map.emplace(key, row);
+    d.row_keys.push_back(key);
+    for (auto& col : d.int_cols) {
         col.push_back(0);
     }
-    for (auto& col : float_columns_) {
+    for (auto& col : d.float_cols) {
         col.push_back(0.0);
     }
     journal_.insert(key);
 }
 
 bool Table::contains(int64_t key) const {
-    return row_map_.contains(key);
+    const auto it = pages_.find(page_id(key));
+    return it != pages_.end() && it->second.data->row_map.contains(key);
 }
 
 void Table::erase(int64_t key) {
-    auto it = row_map_.find(key);
-    if (it == row_map_.end()) {
+    const std::uint64_t pid = page_id(key);
+    auto it = pages_.find(pid);
+    if (it == pages_.end() || !it->second.data->row_map.contains(key)) {
         throw key_error(key);
     }
-    const std::uint32_t row = it->second;
-    row_map_.erase(it);
+    it->second.detach(copied_cells_);
+    PageData& d = *it->second.data;
+
+    const std::uint32_t row = d.row_map.at(key);
+    d.row_map.erase(key);
 
     // Swap-with-last keeps every column array contiguous and dense
     // (true SoA, no tombstones). Deterministic: given the same op
     // sequence, the moved key is always the same.
-    const std::uint32_t last = static_cast<std::uint32_t>(row_keys_.size() - 1);
+    const std::uint32_t last = static_cast<std::uint32_t>(d.row_keys.size() - 1);
     if (row != last) {
-        const int64_t moved_key = row_keys_[last];
-        row_keys_[row] = moved_key;
-        row_map_[moved_key] = row;
-        for (auto& col : int_columns_) {
+        const int64_t moved_key = d.row_keys[last];
+        d.row_keys[row] = moved_key;
+        d.row_map[moved_key] = row;
+        for (auto& col : d.int_cols) {
             col[row] = col[last];
         }
-        for (auto& col : float_columns_) {
+        for (auto& col : d.float_cols) {
             col[row] = col[last];
         }
     }
-    row_keys_.pop_back();
-    for (auto& col : int_columns_) {
+    d.row_keys.pop_back();
+    for (auto& col : d.int_cols) {
         col.pop_back();
     }
-    for (auto& col : float_columns_) {
+    for (auto& col : d.float_cols) {
         col.pop_back();
+    }
+
+    // Page went empty -> it sleeps (zero memory) again.
+    if (d.row_keys.empty()) {
+        pages_.erase(it);
     }
     journal_.erase(key);
 }
 
+std::size_t Table::row_count() const {
+    std::size_t n = 0;
+    for (const auto& [id, page] : pages_) {
+        n += page.data->row_keys.size();
+    }
+    return n;
+}
+
 int64_t Table::get_i(int64_t key, std::uint32_t col) const {
-    return int_columns_[int_index(col)][row_of(key)];
+    const auto& p = const_page(page_id(key));
+    return p.data->int_cols[int_index(col)][row_of_page(p, key)];
 }
 
 double Table::get_f(int64_t key, std::uint32_t col) const {
-    return float_columns_[float_index(col)][row_of(key)];
+    const auto& p = const_page(page_id(key));
+    return p.data->float_cols[float_index(col)][row_of_page(p, key)];
 }
 
 void Table::set_i(int64_t key, std::uint32_t col, int64_t value) {
-    int_columns_[int_index(col)][row_of(key)] = value;
+    auto& p = mutable_page(page_id(key));
+    p.data->int_cols[int_index(col)][row_of_page(p, key)] = value;
     journal_.set_i(key, col, value);
 }
 
 void Table::set_f(int64_t key, std::uint32_t col, double value) {
-    float_columns_[float_index(col)][row_of(key)] = value;
+    auto& p = mutable_page(page_id(key));
+    p.data->float_cols[float_index(col)][row_of_page(p, key)] = value;
     std::uint64_t bits;
     std::memcpy(&bits, &value, sizeof(bits));
     journal_.set_f(key, col, bits);
 }
 
-const std::vector<int64_t>& Table::column_i(std::uint32_t col) const {
-    return int_columns_[int_index(col)];
+std::size_t Table::page_rows(std::uint64_t page) const {
+    return const_page(page).data->row_keys.size();
 }
 
-const std::vector<double>& Table::column_f(std::uint32_t col) const {
-    return float_columns_[float_index(col)];
+const std::vector<int64_t>& Table::page_column_i(std::uint64_t page, std::uint32_t col) const {
+    return const_page(page).data->int_cols[int_index(col)];
+}
+
+const std::vector<double>& Table::page_column_f(std::uint64_t page, std::uint32_t col) const {
+    return const_page(page).data->float_cols[float_index(col)];
+}
+
+// ---------------------------------------------------------------------------
+// Transactions (S4) — snapshot/rollback with copy-on-write
+// ---------------------------------------------------------------------------
+
+void Table::begin_transaction() {
+    if (snapshot_) {
+        throw std::runtime_error("eafardb: transaction already open");
+    }
+    auto snap = std::make_shared<Snapshot>();
+    snap->pages = pages_;             // shared_ptr copies: no data copied
+    snap->journal_size = journal_.size();
+    snapshot_ = std::move(snap);
+}
+
+void Table::commit() {
+    if (!snapshot_) {
+        throw std::runtime_error("eafardb: no open transaction");
+    }
+    snapshot_.reset(); // COW'd pages keep their copies; state stays
+}
+
+void Table::rollback() {
+    if (!snapshot_) {
+        throw std::runtime_error("eafardb: no open transaction");
+    }
+    // Restore the page map bit-exactly (shared buffers from snapshot time).
+    pages_ = snapshot_->pages;
+    // Uncommitted journal entries are not history: truncate them.
+    journal_.truncate(snapshot_->journal_size);
+    snapshot_.reset();
 }
 
 // ---------------------------------------------------------------------------
@@ -172,8 +278,6 @@ Table Table::replay(const Journal& journal, std::uint32_t page_size) {
     for (const auto& e : journal.entries()) {
         switch (e.op) {
         case JournalOp::AddColumn:
-            // add_column throws on duplicates; a journal is a valid history,
-            // so this cannot happen for a well-formed journal.
             t.add_column(e.name, static_cast<ColumnType>(e.type));
             break;
         case JournalOp::Insert:
@@ -197,71 +301,53 @@ Table Table::replay(const Journal& journal, std::uint32_t page_size) {
 }
 
 // ---------------------------------------------------------------------------
-// Sparse pages (S2)
+// Scans (S2) — ascending pages, ascending keys within pages
 // ---------------------------------------------------------------------------
-
-std::uint64_t Table::page_count() const {
-    std::uint64_t count = 0;
-    std::uint64_t last_page = 0;
-    bool first = true;
-    // row_map_ is ordered by key; page_id is monotone along it, so
-    // distinct pages = changes of page_id between adjacent keys.
-    for (auto it = row_map_.begin(); it != row_map_.end(); ++it) {
-        const std::uint64_t p = page_id(it->first);
-        if (first || p != last_page) {
-            ++count;
-            last_page = p;
-            first = false;
-        }
-    }
-    return count;
-}
 
 void Table::scan_i_impl(std::uint32_t col, bool ranged, int64_t from, int64_t to,
                         const std::function<void(int64_t, int64_t)>& fn) const {
     const std::uint32_t local = int_index(col);
-    const std::vector<int64_t>& data = int_columns_[local];
-
-    auto it = row_map_.begin();
-    auto end = row_map_.end();
-    if (ranged) {
-        it = row_map_.lower_bound(from);
-        end = row_map_.upper_bound(to);
-    }
     std::uint64_t last_page = 0;
     bool first = true;
-    for (; it != end; ++it) {
-        const std::uint64_t p = page_id(it->first);
-        if (first || p != last_page) {
-            ++touched_pages_;
-            last_page = p;
-            first = false;
+    for (const auto& [pid, page] : pages_) {
+        const auto& d = *page.data;
+        const auto& data = d.int_cols[local];
+        // Page touched (distinct page visit) only if it yields >=1 row.
+        bool page_touched = false;
+        for (auto it = d.row_map.begin(); it != d.row_map.end(); ++it) {
+            if (ranged && (it->first < from || it->first > to)) {
+                continue;
+            }
+            if (!page_touched) {
+                page_touched = true;
+                if (first || pid != last_page) {
+                    ++touched_pages_;
+                    last_page = pid;
+                    first = false;
+                }
+            }
+            fn(it->first, data[it->second]);
         }
-        fn(it->first, data[it->second]);
     }
 }
 
 void Table::scan_f_impl(std::uint32_t col, bool ranged, int64_t from, int64_t to,
                         const std::function<void(int64_t, double)>& fn) const {
     const std::uint32_t local = float_index(col);
-    const std::vector<double>& data = float_columns_[local];
-
-    auto it = row_map_.begin();
-    auto end = row_map_.end();
-    if (ranged) {
-        it = row_map_.lower_bound(from);
-        end = row_map_.upper_bound(to);
-    }
-    std::uint64_t last_page = 0;
-    bool first = true;
-    for (; it != end; ++it) {
-        const std::uint64_t p = page_id(it->first);
-        if (first || p != last_page) {
-            ++touched_pages_;
-            last_page = p;
-            first = false;
+    for (const auto& [pid, page] : pages_) {
+        const auto& d = *page.data;
+        const auto& data = d.float_cols[local];
+        bool page_touched = false;
+        for (auto it = d.row_map.begin(); it != d.row_map.end(); ++it) {
+            if (ranged && (it->first < from || it->first > to)) {
+                continue;
+            }
+            if (!page_touched) {
+                page_touched = true;
+                ++touched_pages_;
+            }
+            fn(it->first, data[it->second]);
         }
-        fn(it->first, data[it->second]);
     }
 }
 

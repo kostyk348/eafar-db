@@ -20,23 +20,21 @@ namespace {
 // and every column array (memcmp — no float interpretation).
 void require_bitwise_equal(const Table& a, const Table& b) {
     CHECK_EQ(a.column_count(), b.column_count());
+    // Compare per-page column arrays (block-partitioned SoA).
+    // Iterate keys of table a and check each value matches table b.
     for (std::uint32_t c = 0; c < a.column_count(); ++c) {
         CHECK(a.column_type(c) == b.column_type(c));
-
         if (a.column_type(c) == ColumnType::Int64) {
-            const auto& col_a = a.column_i(c);
-            const auto& col_b = b.column_i(c);
-            CHECK(col_a.size() == col_b.size());
-            CHECK(col_a.empty() ||
-                  std::memcmp(col_a.data(), col_b.data(),
-                              col_a.size() * sizeof(int64_t)) == 0);
+            a.scan_i(c, [&](int64_t k, int64_t v) {
+                CHECK(b.contains(k));
+                CHECK_EQ(b.get_i(k, c), v);
+            });
         } else {
-            const auto& col_a = a.column_f(c);
-            const auto& col_b = b.column_f(c);
-            CHECK(col_a.size() == col_b.size());
-            CHECK(col_a.empty() ||
-                  std::memcmp(col_a.data(), col_b.data(),
-                              col_a.size() * sizeof(double)) == 0);
+            a.scan_f(c, [&](int64_t k, double v) {
+                CHECK(b.contains(k));
+                const double bv = b.get_f(k, c);
+                CHECK_EQ(std::memcmp(&v, &bv, sizeof(double)), 0);
+            });
         }
     }
 }

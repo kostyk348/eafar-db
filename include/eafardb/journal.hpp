@@ -47,6 +47,14 @@ public:
 
     std::size_t size() const { return entries_.size(); }
     const std::vector<JournalEntry>& entries() const { return entries_; }
+    // Drops entries from position `keep` onward (rollback of uncommitted
+    // work: an aborted transaction is not history).
+    void truncate(std::size_t keep) {
+        if (keep > entries_.size()) {
+            keep = entries_.size();
+        }
+        entries_.resize(keep);
+    }
 
 private:
     std::vector<JournalEntry> entries_;

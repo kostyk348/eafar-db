@@ -110,7 +110,7 @@ TEST(insert_existing_key_noop) {
 // ---------------------------------------------------------------------------
 
 TEST(column_arrays_contiguous_soa) {
-    Table t;
+    Table t(256); // page_size 256: keys 0..999 => pages 0..3
     t.add_column("i", ColumnType::Int64);
     t.add_column("f", ColumnType::Float64);
     for (int64_t k = 0; k < 1000; ++k) {
@@ -118,21 +118,23 @@ TEST(column_arrays_contiguous_soa) {
         t.set_i(k, 0, k * k);
         t.set_f(k, 1, static_cast<double>(k) + 0.5);
     }
-    // SoA: each column is one contiguous array; row r of column c is
-    // at data()[r]. Contiguity is guaranteed by vector; we assert the
-    // column-wise access pattern exposes the raw array.
-    const auto& icol = t.column_i(0);
-    const auto& fcol = t.column_f(1);
-    CHECK_EQ(icol.size(), 1000u);
-    CHECK_EQ(fcol.size(), 1000u);
-    CHECK_EQ(icol[500], 500LL * 500);
-    CHECK_EQ(fcol[500], 500.5);
-    // data() pointers are usable for bulk column reads (SoA scan).
-    const int64_t* ip = icol.data();
-    const double* fp = fcol.data();
-    for (std::size_t r = 0; r < 1000; ++r) {
-        CHECK_EQ(ip[r], static_cast<int64_t>(r) * r);
-        CHECK_EQ(fp[r], static_cast<double>(r) + 0.5);
+    // SoA: within a page, each column is one contiguous array; local row r
+    // of column c is at data()[r]. Contiguity is per page (block-partitioned
+    // columnar, like Parquet row groups).
+    for (std::uint64_t p = 0; p < 4; ++p) {
+        const auto& icol = t.page_column_i(p, 0);
+        const auto& fcol = t.page_column_f(p, 1);
+        const std::size_t n = t.page_rows(p);
+        CHECK_EQ(icol.size(), n);
+        CHECK_EQ(fcol.size(), n);
+        // data() pointers are usable for bulk column reads (SoA scan).
+        const int64_t* ip = icol.data();
+        const double* fp = fcol.data();
+        for (std::size_t r = 0; r < n; ++r) {
+            const int64_t key = static_cast<int64_t>(p * 256 + r);
+            CHECK_EQ(ip[r], key * key);
+            CHECK_EQ(fp[r], static_cast<double>(key) + 0.5);
+        }
     }
 }
 
@@ -145,13 +147,14 @@ TEST(column_scans_are_typed) {
         t.set_f(k, 1, static_cast<double>(k) * 10.0);
     }
     // A column-wise scan walks only that column's array (SoA locality).
-    const auto& fcol = t.column_f(1);
+    const auto& fcol = t.page_column_f(0, 1);
     CHECK_EQ(fcol.size(), 5u);
     CHECK_EQ(fcol[0], 0.0);
     CHECK_EQ(fcol[4], 40.0);
     // Wrong-type column access throws (no silent reinterpret).
-    CHECK_THROWS(t.column_f(0));
-    CHECK_THROWS(t.column_i(1));
+    CHECK_THROWS(t.page_column_f(0, 0));
+    CHECK_THROWS(t.page_column_i(0, 1));
+    CHECK_THROWS(t.page_column_i(5, 0)); // unmaterialized page
 }
 
 // ---------------------------------------------------------------------------
@@ -258,7 +261,10 @@ TEST(absent_keys_cost_nothing) {
     t.insert(1);
     t.insert(1'000'000'000LL);
     CHECK_EQ(t.row_count(), 2u);
-    CHECK_EQ(t.column_f(0).size(), 2u);
+    // Two rows in two distinct pages (no per-absent-key allocation).
+    CHECK_EQ(t.page_count(), 2u);
+    CHECK_EQ(t.page_rows(t.page_id(1)), 1u);
+    CHECK_EQ(t.page_rows(t.page_id(1'000'000'000LL)), 1u);
     CHECK_EQ(t.get_f(1'000'000'000LL, 0), 0.0);
 }
 
@@ -270,5 +276,7 @@ TEST(large_sparse_insert) {
     }
     CHECK_EQ(t.row_count(), 100'000u);
     CHECK_EQ(t.get_f(999 * 1000, 0), 0.0);
-    CHECK_EQ(t.column_f(0).size(), 100'000u);
+    // One row per page (keys 1000 apart, page_size 256).
+    CHECK_EQ(t.page_count(), 100'000u);
+    CHECK_EQ(t.page_rows(t.page_id(999 * 1000)), 1u);
 }
