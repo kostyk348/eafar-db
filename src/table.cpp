@@ -22,9 +22,7 @@ std::runtime_error column_error(std::string_view name) {
 
 } // namespace
 
-Table::Table(std::uint32_t page_size) {
-    (void)page_size; // page materialization arrives in S2
-}
+Table::Table(std::uint32_t page_size) : page_size_(page_size > 0 ? page_size : 256) {}
 
 std::uint32_t Table::add_column(std::string name, ColumnType type) {
     for (std::size_t i = 0; i < column_names_.size(); ++i) {
@@ -155,6 +153,75 @@ const std::vector<int64_t>& Table::column_i(std::uint32_t col) const {
 
 const std::vector<double>& Table::column_f(std::uint32_t col) const {
     return float_columns_[float_index(col)];
+}
+
+// ---------------------------------------------------------------------------
+// Sparse pages (S2)
+// ---------------------------------------------------------------------------
+
+std::uint64_t Table::page_count() const {
+    std::uint64_t count = 0;
+    std::uint64_t last_page = 0;
+    bool first = true;
+    // row_map_ is ordered by key; page_id is monotone along it, so
+    // distinct pages = changes of page_id between adjacent keys.
+    for (auto it = row_map_.begin(); it != row_map_.end(); ++it) {
+        const std::uint64_t p = page_id(it->first);
+        if (first || p != last_page) {
+            ++count;
+            last_page = p;
+            first = false;
+        }
+    }
+    return count;
+}
+
+void Table::scan_i_impl(std::uint32_t col, bool ranged, int64_t from, int64_t to,
+                        const std::function<void(int64_t, int64_t)>& fn) const {
+    const std::uint32_t local = int_index(col);
+    const std::vector<int64_t>& data = int_columns_[local];
+
+    auto it = row_map_.begin();
+    auto end = row_map_.end();
+    if (ranged) {
+        it = row_map_.lower_bound(from);
+        end = row_map_.upper_bound(to);
+    }
+    std::uint64_t last_page = 0;
+    bool first = true;
+    for (; it != end; ++it) {
+        const std::uint64_t p = page_id(it->first);
+        if (first || p != last_page) {
+            ++touched_pages_;
+            last_page = p;
+            first = false;
+        }
+        fn(it->first, data[it->second]);
+    }
+}
+
+void Table::scan_f_impl(std::uint32_t col, bool ranged, int64_t from, int64_t to,
+                        const std::function<void(int64_t, double)>& fn) const {
+    const std::uint32_t local = float_index(col);
+    const std::vector<double>& data = float_columns_[local];
+
+    auto it = row_map_.begin();
+    auto end = row_map_.end();
+    if (ranged) {
+        it = row_map_.lower_bound(from);
+        end = row_map_.upper_bound(to);
+    }
+    std::uint64_t last_page = 0;
+    bool first = true;
+    for (; it != end; ++it) {
+        const std::uint64_t p = page_id(it->first);
+        if (first || p != last_page) {
+            ++touched_pages_;
+            last_page = p;
+            first = false;
+        }
+        fn(it->first, data[it->second]);
+    }
 }
 
 } // namespace eafardb

@@ -39,6 +39,7 @@ target_compile_options(eafardb PRIVATE -Wall -Wextra)
 add_executable(eafardb_tests
     tests/main.cpp
     tests/test_table.cpp
+    tests/test_pages.cpp
 )
 target_link_libraries(eafardb_tests PRIVATE eafardb)
 target_compile_options(eafardb_tests PRIVATE -Wall -Wextra)
