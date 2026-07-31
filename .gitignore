@@ -21,3 +21,9 @@ Thumbs.db
 .idea/
 *.swp
 *.bak
+
+# Temp
+all/
+hierarchical/
+membership/
+watch/
