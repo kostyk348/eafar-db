@@ -1,8 +1,39 @@
 # EAFAR-DB
 
-**Database implementation of the EAFAR paradigm** — Everything is a Field, Archive, Replay.
+[![C++20](https://img.shields.io/badge/language-C%2B%2B20-blue)]()
+[![Build](https://img.shields.io/badge/build-MinGW--w64-green)]()
+[![Tests](https://img.shields.io/badge/tests-142%2F142-brightgreen)]()
+[![License](https://img.shields.io/badge/license-MIT-lightgrey)]()
+[![Version](https://img.shields.io/badge/version-v0.1.0-blue)]()
 
-EAFAR-DB is a C++20 embedded database that applies the EAFAR design principles at the storage layer:
+> **EAFAR-DB** — Database built on the **EAFAR** design principles *(Everything is a Field, Archive, Replay)*. Embedded, sparse, time-travelable.
+
+## About
+
+EAFAR-DB applies the EAFAR paradigm to persistent storage:
+
+- **E**verything is a **F**ield → column-oriented SoA layout, zero row overhead
+- **A**rchive → immutable journal with injectable clock; time-travel queries via `replay_at()`
+- **R**eplay → reconstruct any point-in-time state; audit trail as first-class citizen
+
+The database is built from three layers, each independently testable and composable:
+
+| Layer | What it does | EAFAR-DB mechanism |
+|---|---|---|
+| **Fields** | Data as columns, not rows | `Table<T>` stores each field contiguously |
+| **Sparse archive** | Pages only materialize when probed | `Page::mtr()` tracks dirty sub-ranges; unvisited cells cost O(1) |
+| **Behavior layer** | Queries, views, transactions as state machines | `View` (automaton), `Event`, `FuzzyQuery` (membership), `Journal` (replay) |
+
+### Quick links
+
+- **Build:** CMake + MinGW-w64, C++20 — see [Getting Started](#build)
+- **Demos:** SCADA historian (time-travel queries) + Galaxy Architect (sparse procedural galaxy, turn-based strategy)
+- **Spec:** Full S1–S9 design with anti-Goodhart guards in [`spec/eafar_db_spec.md`](spec/eafar_db_spec.md)
+- **Topics:** `eafar` · `database` · `sparse-storage` · `soa` · `embedded` · `time-travel` · `incremental-view` · `fuzzy-query` · `automata` · `cxx20` · `minimal-recompute` · `columnar` · `archive` · `replay` · `sparse-pages`
+
+### Design principles (anti-Goodhart)
+
+Every spec scenario has an explicit guard against metric gaming: sparse costs stay O(0) even when fully populated; lazy recompute preserves precision on re-derive; dependency cycles are rejected at declaration; audit enumerates only committed events; materialized view recompute is bounded by delta.
 
 | Principle | Meaning | EAFAR-DB mechanism |
 |---|---|---|
