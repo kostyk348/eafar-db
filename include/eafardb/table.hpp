@@ -38,6 +38,8 @@
 
 namespace eafardb {
 
+class View; // materialized view (S5): automaton over page events
+
 // --- Physical page: block-partitioned SoA storage (shared for COW) ---
 struct PageData {
     // Local row index within the page (ascending-key-ordered map).
@@ -106,10 +108,27 @@ public:
     std::uint64_t page_id(int64_t key) const { return static_cast<std::uint64_t>(key) / page_size_; }
     // Number of pages that currently hold at least one row (physical).
     std::uint64_t page_count() const { return static_cast<std::uint64_t>(pages_.size()); }
+    // True if the page is currently materialized (holds at least one row).
+    bool has_page(std::uint64_t page) const { return pages_.find(page) != pages_.end(); }
+    // All materialized page ids (ascending). For view materialization.
+    std::vector<std::uint64_t> materialized_pages() const {
+        std::vector<std::uint64_t> ids;
+        ids.reserve(pages_.size());
+        for (const auto& [pid, page] : pages_) {
+            ids.push_back(pid);
+        }
+        return ids;
+    }
     // Pages touched by scans (monotonic counter, for the S2 thesis).
     std::uint64_t touched_pages() const { return touched_pages_; }
     // Cells deep-copied by copy-on-write (S4 counter proof).
     std::uint64_t copied_cells() const { return copied_cells_; }
+
+    // --- Materialized views (S5): view = automaton over page events ---
+    // A view subscribes via View's constructor (source table's attach()).
+    // Every mutation that touches a page notifies attached views, so a
+    // view can recompute only its dirty pages (incremental, lazy).
+    void attach(View& view);
 
     // --- Transactions (S4) ---
     void begin_transaction();
@@ -169,6 +188,12 @@ private:
     mutable std::uint64_t touched_pages_ = 0; // scan page-visit counter
     std::uint64_t copied_cells_ = 0;   // COW deep-copy counter (S4)
     Journal journal_;                  // write journal (S3)
+
+    // Subscribed materialized views (S5). Views are notified on every
+    // page-touching mutation (insert/erase/set), and recompute lazily.
+    std::vector<View*> views_;
+
+    void notify_views(std::uint64_t page_id); // S5 page-event fan-out
 
     // Transaction state (S4).
     struct Snapshot {

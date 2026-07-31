@@ -1,4 +1,5 @@
 #include "eafardb/table.hpp"
+#include "eafardb/view.hpp"
 
 #include <cstring>
 #include <sstream>
@@ -55,6 +56,16 @@ std::uint32_t Table::add_column(std::string name, ColumnType type) {
     const std::uint32_t id = static_cast<std::uint32_t>(column_names_.size() - 1);
     journal_.add_column(id, column_names_.back(), static_cast<std::uint8_t>(type));
     return id;
+}
+
+void Table::attach(View& view) {
+    views_.push_back(&view);
+}
+
+void Table::notify_views(std::uint64_t page_id) {
+    for (View* v : views_) {
+        v->on_page_written(page_id);
+    }
 }
 
 std::uint32_t Table::column_id(std::string_view name) const {
@@ -144,6 +155,7 @@ void Table::insert(int64_t key) {
         col.push_back(0.0);
     }
     journal_.insert(key);
+    notify_views(pid);
 }
 
 bool Table::contains(int64_t key) const {
@@ -191,6 +203,7 @@ void Table::erase(int64_t key) {
         pages_.erase(it);
     }
     journal_.erase(key);
+    notify_views(pid);
 }
 
 std::size_t Table::row_count() const {
@@ -215,6 +228,7 @@ void Table::set_i(int64_t key, std::uint32_t col, int64_t value) {
     auto& p = mutable_page(page_id(key));
     p.data->int_cols[int_index(col)][row_of_page(p, key)] = value;
     journal_.set_i(key, col, value);
+    notify_views(page_id(key));
 }
 
 void Table::set_f(int64_t key, std::uint32_t col, double value) {
@@ -223,6 +237,7 @@ void Table::set_f(int64_t key, std::uint32_t col, double value) {
     std::uint64_t bits;
     std::memcpy(&bits, &value, sizeof(bits));
     journal_.set_f(key, col, bits);
+    notify_views(page_id(key));
 }
 
 std::size_t Table::page_rows(std::uint64_t page) const {
