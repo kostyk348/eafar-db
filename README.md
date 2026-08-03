@@ -61,6 +61,7 @@ Every spec scenario has an explicit guard against metric gaming: sparse costs st
 |---|---|---|
 | **SCADA historian** (`demos/scada_time_travel/`) | Industrial telemetry with time-travel queries | S8+S9 transactions & replay |
 | **Galaxy Architect** (`demos/galaxy_architect/`) | Sparse procedural galaxy, turn-based strategy | S2 (sparse), S6 (faction automata), S7 (diplomacy), S9 (replay) |
+| **Galaxy Architect Phase 2** | Faction AI automata (EXPLORE/EXPAND/WAR/RETREAT), fleet war, fog of war | S6 automata + S8 battle transactions |
 
 ## Build
 
