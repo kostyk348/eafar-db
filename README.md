@@ -83,9 +83,13 @@ cmake --build build --target scada_time_travel
 ## Test status
 
 ```
-S1–S4 core:  78/78 ✅
-EAFAR-DB:    64/64 ✅  (S1–S9, last run: see build output)
+S1–S4 core:  78/78 ✅   (EAFAR header-only library, separate test suite)
+EAFAR-DB:    64/64 ✅   (S1–S9 coverage, 9 test files, 258 asserts)
+Total:       142/142 ✅ (badge above)
 ```
+
+Run: `cmake --build build --target eafardb_tests` then
+`build/eafardb_tests.exe` (prints `N tests, 0 failed`).
 
 ## Project structure
 
