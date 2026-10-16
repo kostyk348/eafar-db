@@ -5,6 +5,8 @@
 [![Tests](https://img.shields.io/badge/tests-142%2F142-brightgreen)]()
 [![License](https://img.shields.io/badge/license-Apache--2.0-red)]()
 [![Version](https://img.shields.io/badge/version-v0.1.0-blue)]()
+[![Release](https://img.shields.io/github/v/release/kostyk348/eafar-db?sort=semver&color=blue)](https://github.com/kostyk348/eafar-db/releases)
+[![Last commit](https://img.shields.io/github/last-commit/kostyk348/eafar-db?branch=main)](https://github.com/kostyk348/eafar-db/commits/main)
 
 > **EAFAR-DB** — Database built on the **EAFAR** design principles *(Everything is a Field, Archive, Replay)*. Embedded, sparse, time-travelable.
 
@@ -44,10 +46,12 @@ Every spec scenario has an explicit guard against metric gaming: sparse costs st
 ## What's in the box
 
 ### Core (S1–S4)
+
 - **EAFAR** — C header-only library: fields, sparse pages, hierarchical automata, events, diffusion.
 - **EAFAR-DB** — Database layer built on EAFAR: tables with physical pages, materialized views, dependency graphs.
 
 ### Feature modules (S5–S9)
+
 | Module | Spec | Status |
 |---|---|---|
 | **S5** Lazy view automata | Per-page partial recompute, incremental materialization | ✅ |
@@ -57,6 +61,7 @@ Every spec scenario has an explicit guard against metric gaming: sparse costs st
 | **S9** Journal timestamps + replay | Injectable `Clock`, `replay_at(journal, t)` time-travel historian | ✅ |
 
 ### Demos
+
 | Demo | What it shows | Key EAFAR feature |
 |---|---|---|
 | **SCADA historian** (`demos/scada_time_travel/`) | Industrial telemetry with time-travel queries | S8+S9 transactions & replay |
@@ -67,12 +72,15 @@ Every spec scenario has an explicit guard against metric gaming: sparse costs st
 
 ```bash
 # Configure (MinGW required — set toolchain path)
+
 cmake -B build -G "MinGW Makefiles" -DCMAKE_CXX_STANDARD=20
 
 # Build all targets (library + tests + demos)
+
 cmake --build build
 
 # Or build a specific target:
+
 cmake --build build --target eafardb_tests
 cmake --build build --target galaxy_architect
 cmake --build build --target scada_time_travel
