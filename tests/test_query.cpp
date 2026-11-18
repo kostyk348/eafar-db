@@ -97,3 +97,55 @@ TEST(fuzzy_threshold_0_returns_all_for_positive_domain) {
     FuzzyQuery q(reg);
     CHECK_EQ(q.count(t, 0, "always", 0.0f), 100u);
 }
+
+TEST(fuzzy_filter_handles_empty_and_no_match_results) {
+    eafar::FuzzyRegistry reg;
+    reg.define("high", eafar::mf::step(100.0f));
+    FuzzyQuery q(reg);
+
+    Table empty;
+    empty.add_column("v", ColumnType::Float64);
+    CHECK(q.filter(empty, 0, "high", 0.0f).empty());
+    CHECK_EQ(q.count(empty, 0, "high", 0.0f), 0u);
+
+    const Table populated = make_table();
+    CHECK(q.filter(populated, 0, "high", 1.0f).empty());
+    CHECK_EQ(q.count(populated, 0, "high", 1.0f), 0u);
+    CHECK_EQ(q.filter(populated, 0, "high", 0.0f).size(), populated.row_count());
+}
+
+TEST(fuzzy_filter_at_full_membership_includes_all_exact_matches) {
+    eafar::FuzzyRegistry reg;
+    reg.define("warm", eafar::mf::ramp(20.0f, 60.0f));
+    FuzzyQuery q(reg);
+
+    const Table t = make_table();
+    const auto matches = q.filter(t, 0, "warm", 1.0f);
+    CHECK_EQ(matches.size(), 40u);
+    CHECK_EQ(matches.front(), 60);
+    CHECK_EQ(matches.back(), 99);
+}
+
+TEST(fuzzy_filter_on_a_replayed_table_matches_its_earlier_result) {
+    eafar::FuzzyRegistry reg;
+    reg.define("high", eafar::mf::step(10.0f));
+    FuzzyQuery q(reg);
+
+    std::uint64_t time = 10;
+    Table t;
+    t.set_journal_clock([&time] { return time; });
+    const auto column = t.add_column("v", ColumnType::Float64);
+    t.insert(1);
+    t.set_f(1, column, 20.0);
+    t.insert(2);
+    t.set_f(2, column, 5.0);
+    const auto original = q.filter(t, column, "high", 1.0f);
+    CHECK(original == std::vector<int64_t>{1});
+
+    time = 20;
+    t.set_f(2, column, 30.0);
+    CHECK_EQ(q.count(t, column, "high", 1.0f), 2u);
+
+    const auto snapshot = Table::replay_at(t.journal(), 10);
+    CHECK(q.filter(snapshot, column, "high", 1.0f) == original);
+}
